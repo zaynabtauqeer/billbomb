@@ -1,141 +1,194 @@
-# 💣 BillBomb
+# BillBomb
 
-**Find and defuse forgotten AWS resources before they blow up your bill.**
+[![Tests](https://github.com/zaynabtauqeer/billbomb/actions/workflows/tests.yml/badge.svg)](https://github.com/zaynabtauqeer/billbomb/actions/workflows/tests.yml)
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
-BillBomb scans every AWS region for servers, databases, disks, IP addresses and gateways you forgot about,
-shows exactly what each one costs you (in dollars *and* rupees), explains why it looks abandoned, and
-stops or deletes it with one confirmed click.
+**Find forgotten AWS resources before they turn into a surprise bill.**
 
-> Built solo for **Hacktoberfest Hackathon NUST × NSTP 2026**. Track 2: Developer Tools & Open-Source Infrastructure
-> (*"Tools that simplify cloud infrastructure and development workflows"*).
+BillBomb scans every region of an AWS account, lists everything that is costing money, checks real usage to
+find what nobody is using, and stops or deletes it after you confirm. Costs are shown per month in USD and PKR.
 
-![BillBomb scan results](docs/scan.png)
+![Scan results](docs/scan.png)
 
 ---
 
-## The problem
+## Contents
 
-> *"launched a big AWS EC2 instance alongside AWS Bedrock... 2 weeks later, a bill for ~$1,700 showed up."*
-> ([a developer on Hacker News, 2026](https://news.ycombinator.com/item?id=48528779))
+- [Why](#why)
+- [Features](#features)
+- [How idle resources are detected](#how-idle-resources-are-detected)
+- [Quick start](#quick-start)
+- [Using a real AWS account](#using-a-real-aws-account)
+- [Auto-stop template](#auto-stop-template)
+- [Architecture](#architecture)
+- [Testing](#testing)
+- [Limitations](#limitations)
+- [Related tools](#related-tools)
+- [Roadmap](#roadmap)
+- [Contributing](#contributing)
+- [License and acknowledgements](#license-and-acknowledgements)
 
-The cloud bills by the hour, like an electricity meter that never switches off. Students and developers spin up a
-server to "quickly test something", forget it, and find out a month later. The same thread found that many
-people forget a running EC2 instance. It's one of the most common horror stories in tech, and AI workloads
-(GPU instances, Bedrock, SageMaker) make bills explode faster than ever.
+## Why
 
-It's worse for students in Pakistan:
+AWS bills by the hour, and it is easy to leave something running. A developer on Hacker News wrote in 2026:
 
-- **$1,700 ≈ PKR 4.7 lakh**, roughly a year of university fees, charged in dollars at a painful exchange rate, often to a parent's card.
-- AWS has **30+ regions**. A server left in Oregon or Mumbai is invisible if your console is set to Virginia.
-- "Free tier" makes people think everything is free. NAT gateways, Elastic IPs, GPUs and RDS are not.
-- AWS Budgets only emails you *after* you've spent. It doesn't tell you *what* to turn off.
+> "launched a big AWS EC2 instance alongside AWS Bedrock... 2 weeks later, a bill for ~$1,700 showed up."
+> ([source](https://news.ycombinator.com/item?id=48528779))
 
-## What BillBomb does
+For a student in Pakistan, $1,700 is roughly PKR 4.7 lakh. It happens often because:
 
-| | Feature |
+- AWS has more than 30 regions and the console shows one at a time, so a resource left in another region is easy to lose.
+- New users assume the free tier covers everything. NAT gateways, Elastic IPs, GPU instances and most databases are not free.
+- AWS Budgets alerts after money is spent and does not say which resource to turn off.
+
+BillBomb is built for students, freelancers, hackathon teams and small startups who manage their own account.
+
+## Features
+
+- **Scans all regions in parallel** for EC2 instances, EBS volumes and snapshots, Elastic IPs, NAT gateways,
+  Application/Network Load Balancers and RDS databases.
+- **Checks real usage** using the last 7 days of CloudWatch data before marking anything idle. New or busy resources are not flagged.
+- **Shows the cost** of each resource and the account total per month, per day and per year, in USD and PKR, with an optional monthly budget.
+- **Cleans up safely.** You select resources and confirm a list of exact actions. On a real account you must also type `DEFUSE`.
+- **Auto-stop template** (CloudFormation) that stops instances and databases every night and emails you near your budget.
+- **Demo mode** with a simulated AWS account, so you can try everything without an AWS account or any charges.
+
+| Confirm before anything changes | After clean-up |
 |---|---|
-| 🛰️ | **Scans every region in parallel** for EC2 instances, EBS volumes and snapshots, Elastic IPs, NAT gateways, load balancers and RDS databases |
-| 🧟 | **Idle detection from real usage**: CloudWatch says the server averaged 0.4% CPU for 7 days, or the database had zero connections |
-| 💸 | **Cost summary**: estimated monthly, daily and yearly cost, spend on idle resources, and budget status, in **USD and PKR** |
-| ✂️ | **Clean-up**: stop servers and databases, delete unattached disks, release IPs, delete idle NAT gateways and load balancers. Every action is listed and confirmed first, and live mode requires typing `DEFUSE` |
-| ⏰ | **Auto-stop template**: a CloudFormation template that stops all servers and databases every night (01:00 PKT) unless tagged `billbomb:keep=true`, plus a budget email alert at 80% |
-| 🧪 | **Demo account**: a simulated AWS account (via [moto](https://github.com/getmoto/moto)) seeded with realistic forgotten resources. Try everything with zero risk and no AWS account |
+| ![Confirmation dialog](docs/confirm.png) | ![After clean-up](docs/after.png) |
 
-### What counts as idle
+## How idle resources are detected
 
-| Resource | Flagged when |
-|---|---|
-| EC2 instance | Running ≥ 2 days with average CPU < 2% over 7 days, or any GPU instance (g4/g5/p3/p4/p5…) left idle |
-| RDS database | Running ≥ 2 days with zero connections over 7 days |
-| EBS volume | Not attached to any server (you pay for every GB) |
-| Elastic IP | Reserved but attached to nothing (all public IPv4 is billed since Feb 2024) |
-| NAT gateway | Under 1 MB of traffic in 7 days (it still bills ~$33/month) |
-| Load balancer | No registered targets behind it |
-| EBS snapshot | Older than 90 days |
+| Resource | Marked idle when | Suggested action |
+|---|---|---|
+| EC2 instance | Running for 2+ days with average CPU under 2% over 7 days, or a GPU instance with almost no load | Stop |
+| RDS database | Running for 2+ days with no connections over 7 days | Stop |
+| EBS volume | Not attached to any instance | Delete |
+| Elastic IP | Not associated with anything (public IPv4 is billed hourly) | Release |
+| NAT gateway | Under 1 MB of traffic over 7 days | Delete |
+| Load balancer | No registered targets | Delete |
+| EBS snapshot | Older than 90 days | Delete |
 
-Resources in active use are listed too, in green, marked *"In use. Leave it alone."*, so you see the full bill.
+Resources in use are still listed, marked **In use**, so the total reflects the whole account.
 
-## Architecture
+## Quick start
 
-```
-            ┌──────────── every region, in parallel ────────────┐
- boto3 ───▶ │ scan_ec2   instances · CPU (CloudWatch) · volumes  │
- session    │            Elastic IPs · NAT gateways · snapshots  │──▶ findings ──▶ summarize()
-            │ scan_rds   databases · connections (CloudWatch)    │    (cost,       USD · PKR · burn/day
-            │ scan_elb   load balancers · target health          │     reasons,    days to budget
-            └────────────────────────────────────────────────────┘     action)
-                                                                         │
-                         actions.defuse()  ◀── confirmed by user ── Flask UI (dashboard)
-```
-
-| File | Role |
-|---|---|
-| `billbomb/scanner.py` | Region discovery, parallel scanning, zombie rules, cost summary |
-| `billbomb/pricing.py` | On-demand price table (us-east-1) with safe fallbacks for unknown types |
-| `billbomb/actions.py` | Explicit per-resource stop/delete actions |
-| `billbomb/demo.py` | Simulated AWS account seeded with forgotten resources (moto) |
-| `app.py`, `templates/`, `static/` | Web UI and JSON API |
-| `infra/autostop.yaml` | Auto-stop template: Lambda + nightly EventBridge rule + AWS Budget alert |
-| `tests/` | pytest suite running the real scanner and actions against simulated AWS |
-
-## Setup
+Requires Python 3.10 or newer.
 
 ```bash
 git clone https://github.com/zaynabtauqeer/billbomb.git
 cd billbomb
 pip install -r requirements.txt
-python app.py          # live mode if AWS credentials are configured, otherwise demo
-python app.py --demo   # force the simulated demo account
+python app.py --demo
 ```
 
-Open **http://localhost:8080**.
+Open <http://localhost:8080>, wait a few seconds for the demo account to load, and click **Scan account**.
 
-**Live mode** uses your normal AWS credentials (`aws configure`, environment variables or SSO). For scanning only, a
-read-only policy is enough: `ec2:Describe*`, `rds:DescribeDBInstances`, `elasticloadbalancing:Describe*`,
-`cloudwatch:GetMetricStatistics`, `sts:GetCallerIdentity`. Defusing additionally needs the matching
-stop/delete/release permissions. Credentials never leave your machine, and nothing is stored.
+The demo account is simulated with [moto](https://github.com/getmoto/moto). It contains a forgotten GPU instance,
+an unused database, idle servers in three regions, an unattached 500 GB disk, a NAT gateway with no traffic, two
+spare IPs and an empty load balancer, plus one site that is actually in use. The scanner and clean-up code run
+against it unchanged.
 
-**Auto-stop template:** download the template from the app (or use `infra/autostop.yaml`) and deploy it in
-CloudFormation in each region you use.
+## Using a real AWS account
 
-**Tests:** `python -m pytest` (runs entirely against simulated AWS, no account needed).
+```bash
+python app.py
+```
 
-## Honest limitations
+Without `--demo`, BillBomb uses your normal AWS credentials (`aws configure`, environment variables or SSO).
+If no credentials are found it falls back to demo mode. The account ID is shown in the top bar.
 
-- Prices are **on-demand estimates for us-east-1** and ignore data transfer, reserved/spot pricing and free-tier credits.
-  It's a smoke alarm, not an invoice.
-- Covers the services behind most surprise bills (EC2, EBS, EIP, NAT, ELB, RDS). Not yet: SageMaker endpoints,
-  OpenSearch, EKS, Bedrock provisioned throughput, S3 storage growth.
-- The auto-stop template is syntactically checked but was not deployed during the hackathon (no AWS account was available).
+**Permissions.** Scanning is read-only:
 
-## Related work, and how BillBomb differs
+```
+ec2:Describe*
+rds:DescribeDBInstances
+elasticloadbalancing:Describe*
+cloudwatch:GetMetricStatistics
+sts:GetCallerIdentity
+```
 
-- **AWS Budgets / Cost Explorer**: alert *after* spending and don't say what to turn off.
-- **aws-nuke / cloud-nuke**: delete *everything* in an account. Great for sandboxes, dangerous for students with one real project.
-- **Komiser, Steampipe**: powerful inventory tools for teams, with more setup than a student will do at 2 a.m.
+Clean-up additionally needs `ec2:StopInstances`, `ec2:DeleteVolume`, `ec2:ReleaseAddress`,
+`ec2:DeleteNatGateway`, `ec2:DeleteSnapshot`, `rds:StopDBInstance` and `elasticloadbalancing:DeleteLoadBalancer`
+for the actions you use. Credentials are read by boto3 on your machine and are never stored by BillBomb.
 
-BillBomb is built for the individual student or developer: **find what's forgotten, prove it's unused, show the cost
-in your currency, and remove only what you confirm.**
+## Auto-stop template
+
+[`infra/autostop.yaml`](infra/autostop.yaml) is a CloudFormation stack with:
+
+- a Lambda function that stops running EC2 instances and available RDS databases, skipping anything tagged `billbomb:keep=true`
+- an EventBridge rule that runs it every night (default `cron(0 20 * * ? *)`, 01:00 PKT)
+- an AWS Budget that emails you when actual spend passes 80% of a monthly amount
+
+Deploy it once in each region you use. It can also be downloaded from the dashboard.
+
+## Architecture
+
+```
+               ┌───────────── all enabled regions, in parallel ─────────────┐
+ boto3  ──────▶│ scan_ec2   instances (+ CPU), volumes, IPs, NAT, snapshots │
+ session       │ scan_rds   databases (+ connections)                       │──▶ findings ──▶ summarize()
+               │ scan_elb   load balancers (+ target health)                │                cost in USD/PKR
+               └────────────────────────────────────────────────────────────┘
+                                                                                    │
+                         actions.defuse()  ◀──── confirmed selection ──── Flask dashboard
+```
+
+| Path | Purpose |
+|---|---|
+| `billbomb/scanner.py` | Region discovery, parallel checks, idle rules, cost summary |
+| `billbomb/pricing.py` | On-demand price table (us-east-1) with fallbacks for unknown instance types |
+| `billbomb/actions.py` | Per-resource stop, delete and release actions |
+| `billbomb/demo.py` | Simulated AWS account used by demo mode and tests |
+| `app.py`, `templates/`, `static/` | Dashboard and JSON API |
+| `infra/autostop.yaml` | Auto-stop CloudFormation template |
+| `tests/` | pytest suite run against simulated AWS |
+
+## Testing
+
+```bash
+python -m pytest
+```
+
+The suite runs the real scanner and clean-up actions against a moto-simulated account: idle detection across
+regions, in-use resources left alone, a busy NAT gateway not flagged, cost maths, pricing fallbacks and deleting a
+resource. Tests run on every push via GitHub Actions.
+
+## Limitations
+
+- Prices are on-demand estimates for us-east-1. Data transfer, spot pricing, savings plans and credits are not included.
+- Not yet covered: SageMaker endpoints, Bedrock provisioned throughput, EKS, OpenSearch and S3 storage growth.
+- Live mode and the auto-stop template have not yet been run against a real AWS account. They were built and tested
+  against the moto simulator; the template is syntax-checked.
+
+## Related tools
+
+- **AWS Budgets / Cost Explorer** report spending but do not point to the resource to turn off.
+- **aws-nuke / cloud-nuke** delete everything in an account, which suits throwaway sandboxes.
+- **Komiser / Steampipe** are inventory tools aimed at teams.
+
+BillBomb focuses on one person with a small account: find what is forgotten, show that it is unused and what it
+costs, and remove only what you confirm.
 
 ## Roadmap
 
-- More services: SageMaker endpoints, Bedrock provisioned throughput, EKS, OpenSearch, S3 growth
-- Real-time pricing via the AWS Pricing API, per region
-- Scheduled scans with WhatsApp/email alerts
-- Azure and Google Cloud scanners
+- Per-region prices from the AWS Pricing API
+- More services: SageMaker, Bedrock, EKS, OpenSearch, S3
+- Scheduled scans with email alerts
+- Azure and Google Cloud support
 
-## Team contributions
+## Contributing
 
-Solo project. Research, design, implementation, tests and documentation by
-[@zaynabtauqeer](https://github.com/zaynabtauqeer). Developed with AI pair-programming assistance (Claude Code).
+Issues and pull requests are welcome. New resource checks are a good place to start: add a `scan_*` function in
+`billbomb/scanner.py`, seed an example in `billbomb/demo.py`, and cover it with a test in `tests/`.
 
-## Acknowledgements
+## License and acknowledgements
 
-- [boto3](https://github.com/boto/boto3) (Apache-2.0), [moto](https://github.com/getmoto/moto) (Apache-2.0),
-  [Flask](https://flask.palletsprojects.com/) (BSD-3-Clause)
-- Fonts: Chakra Petch, JetBrains Mono, Inter via Google Fonts (SIL OFL)
-- Problem source: [Hacker News, "What are you working on?" (2026)](https://news.ycombinator.com/item?id=48528779)
+MIT, see [LICENSE](LICENSE).
 
-## License
+Built with [boto3](https://github.com/boto/boto3) and [moto](https://github.com/getmoto/moto) (Apache-2.0) and
+[Flask](https://flask.palletsprojects.com/) (BSD-3-Clause). Fonts: Inter and JetBrains Mono (SIL OFL).
 
-[MIT](LICENSE)
+Created by [@zaynabtauqeer](https://github.com/zaynabtauqeer) for the Hacktoberfest Hackathon NUST × NSTP 2026,
+with help from an AI coding assistant (Claude Code).
