@@ -1,0 +1,110 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  BillBomb dead man's switch. Every night it stops running EC2 instances and RDS
+  databases in this region, unless they are tagged billbomb:keep=true, and emails
+  you when spending crosses your monthly budget.
+
+Parameters:
+  StopScheduleUtc:
+    Type: String
+    Default: "cron(0 20 * * ? *)"
+    Description: When to stop resources (UTC). Default is 01:00 Pakistan time.
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 5
+    Description: Email alert when actual monthly spend passes this amount.
+  AlertEmail:
+    Type: String
+    Description: Where to send budget alerts.
+
+Resources:
+  AutoStopRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: billbomb-autostop
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:StopInstances
+                  - rds:DescribeDBInstances
+                  - rds:ListTagsForResource
+                  - rds:StopDBInstance
+                Resource: "*"
+
+  AutoStopFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 120
+      Role: !GetAtt AutoStopRole.Arn
+      Code:
+        ZipFile: |
+          import boto3
+
+          def keep(tags):
+              return any(t.get("Key") == "billbomb:keep" and t.get("Value") == "true" for t in tags or [])
+
+          def handler(event, context):
+              ec2, rds, stopped = boto3.client("ec2"), boto3.client("rds"), []
+              pages = ec2.get_paginator("describe_instances").paginate(
+                  Filters=[{"Name": "instance-state-name", "Values": ["running"]}])
+              ids = [i["InstanceId"] for p in pages for r in p["Reservations"] for i in r["Instances"]
+                     if not keep(i.get("Tags"))]
+              if ids:
+                  ec2.stop_instances(InstanceIds=ids)
+                  stopped += ids
+              for db in rds.describe_db_instances()["DBInstances"]:
+                  if db["DBInstanceStatus"] != "available":
+                      continue
+                  tags = rds.list_tags_for_resource(ResourceName=db["DBInstanceArn"])["TagList"]
+                  if not keep(tags):
+                      rds.stop_db_instance(DBInstanceIdentifier=db["DBInstanceIdentifier"])
+                      stopped.append(db["DBInstanceIdentifier"])
+              print("BillBomb stopped:", stopped)
+              return {"stopped": stopped}
+
+  NightlySchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: !Ref StopScheduleUtc
+      Targets:
+        - Arn: !GetAtt AutoStopFunction.Arn
+          Id: billbomb-autostop
+
+  SchedulePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AutoStopFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt NightlySchedule.Arn
+
+  SpendAlert:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: billbomb-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: { Amount: !Ref MonthlyBudgetUsd, Unit: USD }
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BillBomb</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;600;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <div class="tape"></div>
+  <header class="top">
+    <div class="logo"><span class="fuse"></span>BILLBOMB</div>
+    <div id="mode" class="mode">connecting…</div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="kicker">Forgotten cloud resources, found and defused</p>
+        <h1>A developer forgot one server.<br>The bill was <span class="red">$1,700</span>.</h1>
+        <p class="lede">That's <b>PKR 4.7 lakh</b>, a year of university fees. BillBomb scans every AWS region for
+          servers, databases, disks and IPs you forgot about, shows exactly what they cost you,
+          and defuses them before the bill lands.</p>
+      </div>
+
+      <div class="device">
+        <div class="device-label">Projected monthly bill</div>
+        <div class="lcd"><span id="usd">$---.--</span></div>
+        <div class="pkr"><span id="pkr">PKR -</span> / month</div>
+        <div class="device-row">
+          <div><div class="device-label">Wasted on zombies</div><div id="wasted" class="mini red">-</div></div>
+          <div><div class="device-label">Per year</div><div id="yearly" class="mini">-</div></div>
+        </div>
+        <div id="countdown" class="countdown">Run a scan to arm the timer</div>
+        <button id="scan" class="scan-btn" disabled>Scan all regions</button>
+        <div class="budget">
+          <label>Monthly budget $ <input id="budget" type="number" min="0" step="1" value="0"></label>
+          <label>PKR per $ <input id="rate" type="number" min="1" step="1" value="280"></label>
+        </div>
+      </div>
+    </section>
+
+    <section id="radar" class="radar hidden">
+      <div class="sweep"></div>
+      <div id="radar-text" class="radar-text">Sweeping regions…</div>
+      <div id="radar-regions" class="radar-regions"></div>
+    </section>
+
+    <section id="results" class="hidden">
+      <div class="section-head">
+        <h2>Regions</h2>
+        <span class="hint">Resources hide in regions you never open</span>
+      </div>
+      <div id="regions" class="regions"></div>
+
+      <div class="section-head">
+        <h2>What's running</h2>
+        <button id="select-zombies" class="link">Select all zombies</button>
+      </div>
+      <div id="findings" class="findings"></div>
+      <div id="errors" class="errors hidden"></div>
+    </section>
+
+    <section class="switch">
+      <div>
+        <h2>Dead man's switch</h2>
+        <p>Never forget again. A one-click CloudFormation stack that <b>stops every server and database each night</b>
+          (01:00 PKT) unless tagged <code>billbomb:keep=true</code>, and emails you at 80% of your monthly budget.</p>
+      </div>
+      <a class="dl" href="/autostop.yaml">Download template</a>
+    </section>
+
+    <section id="demo-tools" class="demo-tools hidden">
+      Demo account: a simulated AWS account (via moto) seeded with realistic forgotten resources. No real charges.
+      <button id="reset" class="link">Reset demo account</button>
+    </section>
+  </main>
+
+  <div id="dock" class="dock hidden">
+    <div class="dock-info"><b id="sel-count">0</b> selected · saves <b id="sel-save">$0</b>/month</div>
+    <button id="defuse" class="defuse">Cut the wire: defuse</button>
+  </div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-card">
+      <h3>Confirm defuse</h3>
+      <p id="modal-mode"></p>
+      <ul id="modal-list"></ul>
+      <label id="confirm-wrap" class="hidden">Type <code>DEFUSE</code> to confirm <input id="confirm" autocomplete="off"></label>
+      <div class="modal-actions">
+        <button id="cancel" class="link">Cancel</button>
+        <button id="go" class="defuse">Defuse now</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="boom" class="boom hidden"></div>
+
+  <footer>MIT licensed · Prices are on-demand estimates (us-east-1) · BillBomb never deletes anything without your confirmation.</footer>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

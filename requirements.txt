@@ -1,0 +1,4 @@
+flask>=3.0
+boto3>=1.34
+moto[ec2,rds,cloudwatch,elbv2]>=5.0
+pytest>=8.0
