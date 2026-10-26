@@ -9,7 +9,7 @@ stops or deletes it with one confirmed click.
 > Built solo for **Hacktoberfest Hackathon NUST × NSTP 2026**. Track 2: Developer Tools & Open-Source Infrastructure
 > (*"Tools that simplify cloud infrastructure and development workflows"*).
 
-![BillBomb](docs/home.png)
+![BillBomb scan results](docs/scan.png)
 
 ---
 
@@ -35,13 +35,13 @@ It's worse for students in Pakistan:
 | | Feature |
 |---|---|
 | 🛰️ | **Scans every region in parallel** for EC2 instances, EBS volumes and snapshots, Elastic IPs, NAT gateways, load balancers and RDS databases |
-| 🧟 | **Zombie detection from real usage**: CloudWatch says the server averaged 0.4% CPU for 7 days, or the database had zero connections |
-| 💸 | **Bill bomb timer**: projected monthly bill, daily burn, yearly cost and when your budget blows, in **USD and PKR** |
-| ✂️ | **One-click defuse**: stop servers and databases, delete unattached disks, release IPs, delete idle NAT gateways and load balancers. Every action is listed and confirmed first, and live mode requires typing `DEFUSE` |
-| ⏰ | **Dead man's switch**: a CloudFormation template that stops all servers and databases every night (01:00 PKT) unless tagged `billbomb:keep=true`, plus a budget email alert at 80% |
+| 🧟 | **Idle detection from real usage**: CloudWatch says the server averaged 0.4% CPU for 7 days, or the database had zero connections |
+| 💸 | **Cost summary**: estimated monthly, daily and yearly cost, spend on idle resources, and budget status, in **USD and PKR** |
+| ✂️ | **Clean-up**: stop servers and databases, delete unattached disks, release IPs, delete idle NAT gateways and load balancers. Every action is listed and confirmed first, and live mode requires typing `DEFUSE` |
+| ⏰ | **Auto-stop template**: a CloudFormation template that stops all servers and databases every night (01:00 PKT) unless tagged `billbomb:keep=true`, plus a budget email alert at 80% |
 | 🧪 | **Demo account**: a simulated AWS account (via [moto](https://github.com/getmoto/moto)) seeded with realistic forgotten resources. Try everything with zero risk and no AWS account |
 
-### What counts as a zombie
+### What counts as idle
 
 | Resource | Flagged when |
 |---|---|
@@ -65,7 +65,7 @@ Resources in active use are listed too, in green, marked *"In use. Leave it alon
             │ scan_elb   load balancers · target health          │     reasons,    days to budget
             └────────────────────────────────────────────────────┘     action)
                                                                          │
-                         actions.defuse()  ◀── confirmed by user ── Flask UI (bomb timer)
+                         actions.defuse()  ◀── confirmed by user ── Flask UI (dashboard)
 ```
 
 | File | Role |
@@ -75,7 +75,7 @@ Resources in active use are listed too, in green, marked *"In use. Leave it alon
 | `billbomb/actions.py` | Explicit per-resource stop/delete actions |
 | `billbomb/demo.py` | Simulated AWS account seeded with forgotten resources (moto) |
 | `app.py`, `templates/`, `static/` | Web UI and JSON API |
-| `infra/autostop.yaml` | Dead man's switch: Lambda + nightly EventBridge rule + AWS Budget alert |
+| `infra/autostop.yaml` | Auto-stop template: Lambda + nightly EventBridge rule + AWS Budget alert |
 | `tests/` | pytest suite running the real scanner and actions against simulated AWS |
 
 ## Setup
@@ -95,7 +95,7 @@ read-only policy is enough: `ec2:Describe*`, `rds:DescribeDBInstances`, `elastic
 `cloudwatch:GetMetricStatistics`, `sts:GetCallerIdentity`. Defusing additionally needs the matching
 stop/delete/release permissions. Credentials never leave your machine, and nothing is stored.
 
-**Dead man's switch:** download the template from the app (or use `infra/autostop.yaml`) and deploy it in
+**Auto-stop template:** download the template from the app (or use `infra/autostop.yaml`) and deploy it in
 CloudFormation in each region you use.
 
 **Tests:** `python -m pytest` (runs entirely against simulated AWS, no account needed).
@@ -106,7 +106,7 @@ CloudFormation in each region you use.
   It's a smoke alarm, not an invoice.
 - Covers the services behind most surprise bills (EC2, EBS, EIP, NAT, ELB, RDS). Not yet: SageMaker endpoints,
   OpenSearch, EKS, Bedrock provisioned throughput, S3 storage growth.
-- The dead man's switch template is syntactically checked but was not deployed during the hackathon (no AWS account was available).
+- The auto-stop template is syntactically checked but was not deployed during the hackathon (no AWS account was available).
 
 ## Related work, and how BillBomb differs
 

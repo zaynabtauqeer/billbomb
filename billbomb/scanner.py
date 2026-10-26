@@ -44,12 +44,12 @@ def _age_days(launched, now, tags=None, demo=False):
 
 
 def _finding(kind, rid, region, monthly_cost, *, name="", state="", age=None, reasons=(),
-             action=None, detail=""):
+             action=None, detail="", usage=""):
     zombie = bool(reasons)
     return {
         "kind": kind, "id": rid, "region": region, "name": name, "state": state,
         "monthly_cost": round(monthly_cost, 2), "age_days": age, "reasons": list(reasons),
-        "zombie": zombie, "action": action, "detail": detail,
+        "zombie": zombie, "action": action, "detail": detail, "usage": usage,
     }
 
 
@@ -95,12 +95,12 @@ def scan_ec2(session, region, now, demo=False):
                                   [{"Name": "InstanceId", "Value": iid}], now)
                 reasons = []
                 if cpu is not None and cpu < IDLE_CPU_PERCENT and (age or 0) >= FORGOTTEN_AFTER_DAYS:
-                    reasons.append(f"Average CPU {cpu}% over the last 7 days: nobody is using it")
+                    reasons.append(f"Average CPU {cpu}% over the last 7 days")
                 if pricing.is_gpu(itype) and (cpu is None or cpu < 10):
-                    reasons.append(f"GPU instance ({itype}) left running: the classic bill bomb")
-                detail = f"{itype}" + (f" · avg CPU {cpu}%" if cpu is not None else " · no CPU data")
+                    reasons.append(f"GPU instance ({itype}) with almost no load")
+                usage = f"CPU {cpu}% avg" if cpu is not None else "no CPU data"
                 out.append(_finding("EC2 instance", iid, region, cost, name=_name(tags), state=state,
-                                    age=age, reasons=reasons, action="stop_instance", detail=detail))
+                                    age=age, reasons=reasons, action="stop_instance", detail=itype, usage=usage))
 
     for page in ec2.get_paginator("describe_volumes").paginate():
         for vol in page["Volumes"]:
@@ -111,8 +111,8 @@ def scan_ec2(session, region, now, demo=False):
             age = _age_days(vol.get("CreateTime"), now, tags, demo)
             out.append(_finding("EBS volume", vol["VolumeId"], region, cost, name=_name(tags),
                                 state="unattached", age=age, action="delete_volume",
-                                reasons=[f"{size} GB disk not attached to any server"],
-                                detail=f"{size} GB {vtype}"))
+                                reasons=["Not attached to any instance"],
+                                detail=f"{size} GB {vtype}", usage="unattached"))
 
     for addr in ec2.describe_addresses().get("Addresses", []):
         if addr.get("AssociationId") or addr.get("InstanceId"):
@@ -121,8 +121,8 @@ def scan_ec2(session, region, now, demo=False):
                             pricing.monthly(pricing.PUBLIC_IPV4_HOURLY),
                             name=_name(addr.get("Tags")) or addr.get("PublicIp", ""),
                             state="unassociated", action="release_address",
-                            reasons=["Public IP reserved but attached to nothing"],
-                            detail=addr.get("PublicIp", "")))
+                            reasons=["Not associated with any instance"],
+                            detail=addr.get("PublicIp", ""), usage="unassociated"))
 
     for page in ec2.get_paginator("describe_nat_gateways").paginate():
         for nat in page["NatGateways"]:
@@ -134,12 +134,12 @@ def scan_ec2(session, region, now, demo=False):
                            [{"Name": "NatGatewayId", "Value": nid}], now, stat="Sum")
             reasons = []
             if (sent or 0) < 1_000_000 and (age or 0) >= FORGOTTEN_AFTER_DAYS:
-                reasons.append("Almost no traffic in 7 days, but it still bills every hour")
-            traffic = "no traffic data" if sent is None else f"{sent / 1e9:.2f} GB out in 7 days"
+                reasons.append("Under 1 MB of traffic in 7 days, still billed hourly")
+            traffic = "no traffic data" if sent is None else f"{sent / 1e9:.2f} GB out (7d)"
             out.append(_finding("NAT gateway", nid, region, pricing.monthly(pricing.NAT_GATEWAY_HOURLY),
                                 name=_name(tags), state=nat["State"], age=age, reasons=reasons,
                                 action="delete_nat_gateway",
-                                detail=f"{nat.get('VpcId', '')} · {traffic} · plus data charges"))
+                                detail=nat.get("VpcId", ""), usage=traffic))
 
     for page in ec2.get_paginator("describe_snapshots").paginate(OwnerIds=["self"]):
         for snap in page["Snapshots"]:
@@ -149,7 +149,7 @@ def scan_ec2(session, region, now, demo=False):
                 out.append(_finding("EBS snapshot", snap["SnapshotId"], region,
                                     size * pricing.SNAPSHOT_GB_MONTH, name=_name(snap.get("Tags")),
                                     state="completed", age=age, action="delete_snapshot",
-                                    reasons=[f"Backup is {int(age)} days old"], detail=f"{size} GB"))
+                                    reasons=[f"Snapshot is {int(age)} days old"], detail=f"{size} GB", usage="-"))
     return out
 
 
@@ -169,11 +169,11 @@ def scan_rds(session, region, now, demo=False):
             conns = _metric(cw, "AWS/RDS", "DatabaseConnections", dims, now)
             reasons = []
             if conns is not None and conns < 0.1 and (age or 0) >= FORGOTTEN_AFTER_DAYS:
-                reasons.append("Zero database connections in the last 7 days")
+                reasons.append("No connections in the last 7 days")
             out.append(_finding("RDS database", dbid, region, cost, name=dbid, state="available", age=age,
                                 reasons=reasons, action="stop_db",
-                                detail=f"{cls} · {db.get('Engine', '')}"
-                                       + (f" · avg {conns} connections" if conns is not None else "")))
+                                detail=f"{cls} · {db.get('Engine', '')}",
+                                usage=f"{conns:g} connections avg" if conns is not None else "no data"))
     return out
 
 
@@ -193,12 +193,12 @@ def scan_elb(session, region, now, demo=False):
             for g in groups:
                 targets += len(elb.describe_target_health(TargetGroupArn=g["TargetGroupArn"])
                                .get("TargetHealthDescriptions", []))
-            reasons = [] if targets else ["Load balancer with no servers behind it"]
+            reasons = [] if targets else ["No registered targets"]
             age = _age_days(lb.get("CreatedTime"), now, None, demo)
             out.append(_finding("Load balancer", lb["LoadBalancerName"], region,
                                 pricing.monthly(pricing.LOAD_BALANCER_HOURLY), name=lb["LoadBalancerName"],
                                 state=lb.get("State", {}).get("Code", ""), age=age, reasons=reasons,
-                                action="delete_load_balancer", detail=f"{lb.get('Type', '')} · {targets} target(s)"))
+                                action="delete_load_balancer", detail=lb.get("Type", ""), usage=f"{targets} target(s)"))
     return out
 
 
