@@ -8,6 +8,12 @@ let labels = {};
 let selected = new Set();
 let shownUsd = 0;
 let scannedRegions = [];
+let scanRegions = null;   // null in live mode means "every enabled region"
+
+function showError(message) {
+  $("error").textContent = message;
+  show("error", true);
+}
 
 function show(id, visible) { $(id).classList.toggle("hidden", !visible); }
 
@@ -24,6 +30,8 @@ function rollTo(target) {
     if (p < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
+  // Background tabs pause animation frames; make sure the final number always lands.
+  setTimeout(() => { shownUsd = target; $("usd").textContent = usdFmt(target); }, dur + 50);
 }
 
 function lakh(pkr) {
@@ -93,7 +101,7 @@ function renderFindings(rate) {
       <div class="cost">
         <div class="usd">${usdFmt(f.monthly_cost)}</div>
         <div class="pk">${pkrFmt(f.monthly_cost * rate)}/mo</div>
-        <div class="act">${escapeHtml(labels[f.action] || "")}</div>
+        ${f.zombie ? `<div class="act">${escapeHtml(labels[f.action] || "")}</div>` : ""}
       </div>
     </div>`;
   }).join("");
@@ -128,14 +136,15 @@ async function scan() {
   $("scan").disabled = true;
   show("results", false);
   show("radar", true);
-  const demoRegions = ["us-east-1", "us-east-2", "us-west-1", "us-west-2", "ap-south-1", "ap-southeast-1",
-    "ap-northeast-1", "eu-west-1", "eu-central-1", "eu-north-1", "me-south-1", "sa-east-1"];
-  $("radar-regions").innerHTML = demoRegions.map((r) => `<span>${r}</span>`).join("");
-  const spans = [...$("radar-regions").children];
-  let i = 0;
-  const tick = setInterval(() => {
-    if (i < spans.length) { spans[i].classList.add("on"); $("radar-text").textContent = `Sweeping ${spans[i].textContent}…`; i++; }
-  }, 900);
+  show("error", false);
+  const started = performance.now();
+  $("radar-text").textContent = scanRegions
+    ? `Scanning ${scanRegions.length} regions in parallel…`
+    : "Scanning every enabled region in parallel…";
+  $("radar-regions").innerHTML = (scanRegions || []).map((r) => `<span>${r}</span>`).join("");
+  const timer = setInterval(() => {
+    $("radar-elapsed").textContent = `${Math.round((performance.now() - started) / 1000)}s`;
+  }, 1000);
   try {
     const data = await post("/api/scan", params());
     findings = data.findings;
@@ -152,9 +161,9 @@ async function scan() {
     } else show("errors", false);
     show("results", true);
   } catch (e) {
-    alert(e.message);
+    showError(e.message);
   } finally {
-    clearInterval(tick);
+    clearInterval(timer);
     show("radar", false);
     $("scan").disabled = false;
   }
@@ -193,9 +202,9 @@ async function doDefuse() {
     $("boom").innerHTML = `<b>Bomb defused</b><span>You just saved ${usdFmt(saved)}/month · ${pkrFmt(saved * params().pkr_rate)}</span>`;
     show("boom", true);
     setTimeout(() => show("boom", false), 3300);
-    if (failed.length) alert(failed.map((r) => r.message).join("\n"));
+    if (failed.length) showError(failed.map((r) => r.message).join(" · "));
   } catch (e) {
-    alert(e.message);
+    showError(e.message);
   } finally {
     $("defuse").disabled = false;
   }
@@ -204,6 +213,7 @@ async function doDefuse() {
 async function boot() {
   const s = await (await fetch("/api/status")).json();
   mode = s.mode;
+  scanRegions = s.regions;
   if (!s.ready) {
     $("mode").textContent = "connecting…";
     setTimeout(boot, 1500);

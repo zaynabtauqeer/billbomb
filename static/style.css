@@ -70,8 +70,9 @@ h1 { font: 700 clamp(32px, 4.6vw, 50px)/1.05 var(--head); margin: 0 0 18px; lett
   background: conic-gradient(from 0deg, #34c75966, transparent 30%); animation: spin 1.2s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .radar-text { font: 600 15px var(--mono); color: var(--green); min-width: 220px; }
+.radar-elapsed { font: 12px var(--mono); color: var(--muted); margin-top: 2px; }
 .radar-regions { display: flex; flex-wrap: wrap; gap: 6px; font: 12px var(--mono); color: var(--muted); }
-.radar-regions span.on { color: var(--green); }
+.error-banner { margin: 0 0 20px; padding: 12px 16px; border: 1px solid var(--red); background: #2a0d0b; color: #ffb3ad; font: 13px var(--mono); }
 
 .section-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 26px 0 12px; }
 h2 { font: 700 20px var(--head); letter-spacing: 0.08em; text-transform: uppercase; margin: 0; }

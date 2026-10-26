@@ -49,7 +49,7 @@ It's worse for students in Pakistan:
 | RDS database | Running ≥ 2 days with zero connections over 7 days |
 | EBS volume | Not attached to any server (you pay for every GB) |
 | Elastic IP | Reserved but attached to nothing (all public IPv4 is billed since Feb 2024) |
-| NAT gateway | Always shown: bills ~$33/month even with zero traffic |
+| NAT gateway | Under 1 MB of traffic in 7 days (it still bills ~$33/month) |
 | Load balancer | No registered targets behind it |
 | EBS snapshot | Older than 90 days |
 

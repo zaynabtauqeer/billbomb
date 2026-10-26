@@ -48,7 +48,8 @@ def index():
 
 @app.get("/api/status")
 def status():
-    return jsonify(mode=STATE["mode"], account=STATE["account"], ready=STATE["ready"])
+    return jsonify(mode=STATE["mode"], account=STATE["account"], ready=STATE["ready"],
+                   regions=STATE["regions"])
 
 
 @app.post("/api/scan")

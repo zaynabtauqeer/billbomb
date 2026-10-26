@@ -53,15 +53,18 @@ def _finding(kind, rid, region, monthly_cost, *, name="", state="", age=None, re
     }
 
 
-def _avg_metric(cw, namespace, metric, dims, now, days=7):
+def _metric(cw, namespace, metric, dims, now, stat="Average", days=7):
+    """7-day average (for Average) or total (for Sum) of hourly datapoints; None if there are none."""
     try:
         resp = cw.get_metric_statistics(
             Namespace=namespace, MetricName=metric, Dimensions=dims,
-            StartTime=now - timedelta(days=days), EndTime=now, Period=3600, Statistics=["Average"])
+            StartTime=now - timedelta(days=days), EndTime=now, Period=3600, Statistics=[stat])
     except (ClientError, BotoCoreError):
         return None
-    points = [p["Average"] for p in resp.get("Datapoints", [])]
-    return round(sum(points) / len(points), 2) if points else None
+    points = [p[stat] for p in resp.get("Datapoints", [])]
+    if not points:
+        return None
+    return round(sum(points) / len(points), 2) if stat == "Average" else round(sum(points), 2)
 
 
 # ------------------------------------------------------------------- checks
@@ -88,7 +91,7 @@ def scan_ec2(session, region, now, demo=False):
                 cost = pricing.ec2_monthly(itype)
                 if inst.get("PublicIpAddress"):
                     cost += pricing.monthly(pricing.PUBLIC_IPV4_HOURLY)
-                cpu = _avg_metric(cw, "AWS/EC2", "CPUUtilization",
+                cpu = _metric(cw, "AWS/EC2", "CPUUtilization",
                                   [{"Name": "InstanceId", "Value": iid}], now)
                 reasons = []
                 if cpu is not None and cpu < IDLE_CPU_PERCENT and (age or 0) >= FORGOTTEN_AFTER_DAYS:
@@ -115,7 +118,8 @@ def scan_ec2(session, region, now, demo=False):
         if addr.get("AssociationId") or addr.get("InstanceId"):
             continue
         out.append(_finding("Elastic IP", addr.get("AllocationId", addr.get("PublicIp")), region,
-                            pricing.monthly(pricing.PUBLIC_IPV4_HOURLY), name=addr.get("PublicIp", ""),
+                            pricing.monthly(pricing.PUBLIC_IPV4_HOURLY),
+                            name=_name(addr.get("Tags")) or addr.get("PublicIp", ""),
                             state="unassociated", action="release_address",
                             reasons=["Public IP reserved but attached to nothing"],
                             detail=addr.get("PublicIp", "")))
@@ -124,13 +128,18 @@ def scan_ec2(session, region, now, demo=False):
         for nat in page["NatGateways"]:
             if nat["State"] not in ("available", "pending"):
                 continue
-            tags = nat.get("Tags")
+            tags, nid = nat.get("Tags"), nat["NatGatewayId"]
             age = _age_days(nat.get("CreateTime"), now, tags, demo)
-            out.append(_finding("NAT gateway", nat["NatGatewayId"], region,
-                                pricing.monthly(pricing.NAT_GATEWAY_HOURLY), name=_name(tags),
-                                state=nat["State"], age=age, action="delete_nat_gateway",
-                                reasons=["NAT gateways bill every hour, even with zero traffic"],
-                                detail=f"in {nat.get('VpcId', '')} · plus data charges"))
+            sent = _metric(cw, "AWS/NATGateway", "BytesOutToDestination",
+                           [{"Name": "NatGatewayId", "Value": nid}], now, stat="Sum")
+            reasons = []
+            if (sent or 0) < 1_000_000 and (age or 0) >= FORGOTTEN_AFTER_DAYS:
+                reasons.append("Almost no traffic in 7 days, but it still bills every hour")
+            traffic = "no traffic data" if sent is None else f"{sent / 1e9:.2f} GB out in 7 days"
+            out.append(_finding("NAT gateway", nid, region, pricing.monthly(pricing.NAT_GATEWAY_HOURLY),
+                                name=_name(tags), state=nat["State"], age=age, reasons=reasons,
+                                action="delete_nat_gateway",
+                                detail=f"{nat.get('VpcId', '')} · {traffic} · plus data charges"))
 
     for page in ec2.get_paginator("describe_snapshots").paginate(OwnerIds=["self"]):
         for snap in page["Snapshots"]:
@@ -157,7 +166,7 @@ def scan_rds(session, region, now, demo=False):
             age = _age_days(db.get("InstanceCreateTime"), now, tags, demo)
             cost = pricing.rds_monthly(cls) + db.get("AllocatedStorage", 20) * 0.115
             dims = [{"Name": "DBInstanceIdentifier", "Value": dbid}]
-            conns = _avg_metric(cw, "AWS/RDS", "DatabaseConnections", dims, now)
+            conns = _metric(cw, "AWS/RDS", "DatabaseConnections", dims, now)
             reasons = []
             if conns is not None and conns < 0.1 and (age or 0) >= FORGOTTEN_AFTER_DAYS:
                 reasons.append("Zero database connections in the last 7 days")

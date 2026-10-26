@@ -19,10 +19,10 @@
     <section class="hero">
       <div class="hero-copy">
         <p class="kicker">Forgotten cloud resources, found and defused</p>
-        <h1>A developer forgot one server.<br>The bill was <span class="red">$1,700</span>.</h1>
-        <p class="lede">That's <b>PKR 4.7 lakh</b>, a year of university fees. BillBomb scans every AWS region for
-          servers, databases, disks and IPs you forgot about, shows exactly what they cost you,
-          and defuses them before the bill lands.</p>
+        <h1>Two weeks after launching one big server,<br>the bill was <span class="red">$1,700</span>.</h1>
+        <p class="lede">That really happened to a developer this year. It's <b>PKR 4.7 lakh</b>, a year of university fees.
+          BillBomb scans every AWS region for servers, databases, disks and IPs you forgot about, shows what each
+          one costs you, and stops the ones you confirm.</p>
       </div>
 
       <div class="device">
@@ -44,9 +44,14 @@
 
     <section id="radar" class="radar hidden">
       <div class="sweep"></div>
-      <div id="radar-text" class="radar-text">Sweeping regions…</div>
+      <div>
+        <div id="radar-text" class="radar-text">Scanning…</div>
+        <div id="radar-elapsed" class="radar-elapsed">0s</div>
+      </div>
       <div id="radar-regions" class="radar-regions"></div>
     </section>
+
+    <div id="error" class="error-banner hidden" role="alert"></div>
 
     <section id="results" class="hidden">
       <div class="section-head">

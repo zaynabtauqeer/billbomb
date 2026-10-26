@@ -20,11 +20,12 @@ def _tags(name, days, resource):
     return [{"ResourceType": resource, "Tags": [{"Key": "Name", "Value": name}, _age(days)]}]
 
 
-def _cpu(cw, namespace, metric, dim_name, dim_value, value):
+def _metric(cw, namespace, metric, dim_name, dim_value, value, unit):
+    """A week of datapoints, every 6 hours, so the scanner's 7-day queries have history."""
     now = datetime.now(timezone.utc)
     cw.put_metric_data(Namespace=namespace, MetricData=[
         {"MetricName": metric, "Dimensions": [{"Name": dim_name, "Value": dim_value}],
-         "Timestamp": now - timedelta(hours=h), "Value": value, "Unit": "Percent" if metric == "CPUUtilization" else "Count"}
+         "Timestamp": now - timedelta(hours=h), "Value": value, "Unit": unit}
         for h in range(1, 168, 6)])
 
 
@@ -33,7 +34,8 @@ def _instance(session, region, itype, name, days, cpu):
     ami = ec2.describe_images(Owners=["amazon"])["Images"][0]["ImageId"]
     iid = ec2.run_instances(ImageId=ami, InstanceType=itype, MinCount=1, MaxCount=1,
                             TagSpecifications=_tags(name, days, "instance"))["Instances"][0]["InstanceId"]
-    _cpu(session.client("cloudwatch", region_name=region), "AWS/EC2", "CPUUtilization", "InstanceId", iid, cpu)
+    _metric(session.client("cloudwatch", region_name=region), "AWS/EC2", "CPUUtilization",
+            "InstanceId", iid, cpu, "Percent")
     return iid
 
 
@@ -49,8 +51,8 @@ def seed(session):
     rds.create_db_instance(DBInstanceIdentifier="fyp-database", DBInstanceClass="db.m5.large",
                            Engine="postgres", AllocatedStorage=100, MasterUsername="admin",
                            MasterUserPassword="demo-password-123", Tags=[_age(23)])
-    _cpu(session.client("cloudwatch", region_name="us-east-1"), "AWS/RDS", "DatabaseConnections",
-         "DBInstanceIdentifier", "fyp-database", 0)
+    _metric(session.client("cloudwatch", region_name="us-east-1"), "AWS/RDS", "DatabaseConnections",
+            "DBInstanceIdentifier", "fyp-database", 0, "Count")
 
     # us-west-2: the GPU someone spun up to "quickly test" an LLM
     _instance(session, "us-west-2", "g5.xlarge", "llm-finetune-test", 9, 0.4)
@@ -61,8 +63,10 @@ def seed(session):
     vpc = ec2.create_vpc(CidrBlock="10.0.0.0/16")["Vpc"]["VpcId"]
     subnet = ec2.create_subnet(VpcId=vpc, CidrBlock="10.0.1.0/24")["Subnet"]["SubnetId"]
     alloc = ec2.allocate_address(Domain="vpc")["AllocationId"]
-    ec2.create_nat_gateway(SubnetId=subnet, AllocationId=alloc,
-                           TagSpecifications=_tags("fyp-vpc-nat", 30, "natgateway"))
+    nat = ec2.create_nat_gateway(SubnetId=subnet, AllocationId=alloc,
+                                 TagSpecifications=_tags("fyp-vpc-nat", 30, "natgateway"))["NatGateway"]
+    _metric(session.client("cloudwatch", region_name="ap-south-1"), "AWS/NATGateway", "BytesOutToDestination",
+            "NatGatewayId", nat["NatGatewayId"], 0, "Bytes")
 
     # eu-west-1: a scraper left running and a load balancer with nothing behind it
     _instance(session, "eu-west-1", "c5.xlarge", "web-scraper", 6, 1.1)

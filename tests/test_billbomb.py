@@ -42,6 +42,18 @@ def test_zombies_sorted_first_by_cost(account):
     assert zombies[0]["name"] == "llm-finetune-test"
 
 
+def test_busy_nat_gateway_is_not_a_zombie(account):
+    ec2 = account.client("ec2", region_name="us-east-2")
+    vpc = ec2.create_vpc(CidrBlock="10.9.0.0/16")["Vpc"]["VpcId"]
+    subnet = ec2.create_subnet(VpcId=vpc, CidrBlock="10.9.1.0/24")["Subnet"]["SubnetId"]
+    nat = ec2.create_nat_gateway(SubnetId=subnet, AllocationId=ec2.allocate_address(Domain="vpc")["AllocationId"],
+                                 TagSpecifications=demo._tags("prod-nat", 30, "natgateway"))["NatGateway"]
+    demo._metric(account.client("cloudwatch", region_name="us-east-2"), "AWS/NATGateway",
+                 "BytesOutToDestination", "NatGatewayId", nat["NatGatewayId"], 5e9, "Bytes")
+    found = by_name(scanner.scan(account, ["us-east-2"], demo=True)["findings"])
+    assert not found["prod-nat"]["zombie"]
+
+
 def test_summary_maths():
     findings = [
         {"monthly_cost": 100.0, "zombie": True, "region": "us-east-1"},
